@@ -1,0 +1,14 @@
+# GitGuardian / ggshield configuration.
+version: 2
+secret:
+  ignored_matches:
+    # NOT a real credential. This is the example signing secret from Slack's
+    # own signature-verification documentation
+    # (https://api.slack.com/authentication/verifying-requests-from-slack),
+    # used in tests/test_slack_signature.py as the one non-circular test
+    # vector: it lets the test recompute Slack's published expected digest
+    # (v0=a2114d57...) and prove our implementation matches Slack's reference,
+    # rather than only agreeing with itself. It has never protected anything.
+    # Flagged by GitGuardian on PR #24; ignored here per maintainer decision.
+    - name: Slack docs signing-secret test vector (tests/test_slack_signature.py)
+      match: 8f742231b10e8888abcd99yyyzzz85a5
