@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -181,6 +182,41 @@ def verify_github_signature(payload: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+# Slack's documented replay window: reject requests whose timestamp differs from
+# local time by more than five minutes.
+SLACK_TIMESTAMP_TOLERANCE_SEC = 60 * 5
+
+
+def verify_slack_signature(payload: bytes, timestamp: str, signature: str) -> bool:
+    """Verify an inbound Slack request signature.
+
+    Implements https://api.slack.com/authentication/verifying-requests-from-slack:
+    HMAC-SHA256 over "v0:{timestamp}:{raw body}" keyed with SLACK_SIGNING_SECRET,
+    compared against the X-Slack-Signature header as "v0={hex digest}".
+
+    Fails closed — a missing signing secret, a missing header, or a timestamp
+    outside the replay window rejects the request.
+    """
+    secret = os.getenv("SLACK_SIGNING_SECRET", "").strip()
+    if not secret or not timestamp or not signature:
+        return False
+
+    # int() (not float()) on purpose: float("nan") would sail through the window
+    # check below, since every comparison against NaN is False.
+    try:
+        request_age = abs(time.time() - int(timestamp))
+    except (TypeError, ValueError):
+        return False
+    if request_age > SLACK_TIMESTAMP_TOLERANCE_SEC:
+        return False
+
+    basestring = b"v0:" + timestamp.encode() + b":" + payload
+    expected = "v0=" + hmac.new(secret.encode(), basestring, hashlib.sha256).hexdigest()
+    # Compare as bytes: compare_digest raises TypeError on non-ASCII str, and the
+    # signature is attacker-controlled. Constant-time either way.
+    return hmac.compare_digest(expected.encode(), signature.encode())
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -344,7 +380,20 @@ async def manual_trigger(
 
 
 @app.post("/slack/action")
-async def slack_action(request: Request, background_tasks: BackgroundTasks):
+async def slack_action(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_slack_signature: str = Header(None),
+    x_slack_request_timestamp: str = Header(None),
+):
+    # Read the raw bytes before parsing — the signature covers the body exactly
+    # as Slack sent it, so a re-serialized form would not reproduce the HMAC.
+    body = await request.body()
+
+    if not verify_slack_signature(body, x_slack_request_timestamp, x_slack_signature):
+        log.warning("Rejected unverified Slack action request")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
     form = await request.form()
     payload = __import__("json").loads(form.get("payload", "{}"))
 
