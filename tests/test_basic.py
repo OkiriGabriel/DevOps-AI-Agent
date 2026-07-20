@@ -40,9 +40,8 @@ async def test_health_endpoint_structure():
         assert response.status_code == 200
         data = response.json()
         assert "status" in data
-    except Exception:
-        # Skip if dependencies not available
-        pass
+    except ImportError:
+        pytest.skip("FastAPI or app deps not available")
 
 
 @pytest.mark.asyncio
@@ -58,9 +57,8 @@ async def test_audit_endpoint_structure():
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list) or isinstance(data, dict)
-    except Exception:
-        # Skip if dependencies not available
-        pass
+    except ImportError:
+        pytest.skip("FastAPI or app deps not available")
 
 
 def test_safe_executor_dry_run():
@@ -216,17 +214,13 @@ class TestPrompts:
 
 
 def test_k8s_tools_dry_run():
-    """Test K8s tools in dry-run mode"""
-    # These tools are defined as agent tool calls, not standalone functions
-    # Testing via agent loop instead
-    assert True
+    """K8s tools are agent tool-calls; covered by test_mcp.py registry smoke test."""
+    pytest.skip("K8s tools are agent tool-calls — see test_mcp.py")
 
 
 def test_github_tools_mock():
-    """Test GitHub tools with mock"""
-    # These tools are defined as agent tool calls, not standalone functions
-    # Testing via agent loop instead
-    assert True
+    """GitHub tools are agent tool-calls; covered by test_mcp.py registry smoke test."""
+    pytest.skip("GitHub tools are agent tool-calls — see test_mcp.py")
 
 
 @pytest.mark.parametrize("alert_name,labels,expected_type", [
