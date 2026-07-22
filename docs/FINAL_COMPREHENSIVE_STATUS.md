@@ -447,7 +447,7 @@ rules:
 ### 1. Install
 
 ```bash
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 python -m venv venv
 source venv/bin/activate
