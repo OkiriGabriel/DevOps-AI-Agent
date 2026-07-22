@@ -20,11 +20,21 @@ class SecurityScanner:
     
     def __init__(self):
         self.enabled = os.getenv('ENABLE_SECURITY_SCANNING', 'true').lower() == 'true'
-        self.compliance_frameworks = os.getenv('COMPLIANCE_FRAMEWORKS', 'CIS').split(',')
-        
+        self.compliance_enabled = (
+            os.getenv('ENABLE_COMPLIANCE_CHECKS', 'true').lower() == 'true'
+        )
+        raw_frameworks = os.getenv('COMPLIANCE_FRAMEWORKS', 'CIS')
+        self.compliance_frameworks = [
+            f.strip() for f in raw_frameworks.split(',') if f.strip()
+        ]
+
         logger.info(f"SecurityScanner initialized (enabled={self.enabled})")
         if self.enabled:
-            logger.info(f"Compliance frameworks: {', '.join(self.compliance_frameworks)}")
+            logger.info(
+                "Compliance checks=%s frameworks=%s",
+                self.compliance_enabled,
+                ', '.join(self.compliance_frameworks) or '(none)',
+            )
     
     def scan_configuration(self, config: Dict) -> Dict:
         """
@@ -265,37 +275,160 @@ class SecurityScanner:
         return findings
     
     def _check_compliance(self, config: Dict) -> List[Dict]:
-        """Check for compliance violations."""
+        """Check for compliance violations (gated by ENABLE_COMPLIANCE_CHECKS)."""
+        if not self.compliance_enabled:
+            return []
+
         findings = []
-        
         for framework in self.compliance_frameworks:
-            if framework.upper() == 'CIS':
-                # CIS Kubernetes Benchmark checks
+            name = framework.upper()
+            if name == 'CIS':
                 findings.extend(self._check_cis_compliance(config))
-            elif framework.upper() == 'SOC2':
-                # SOC2 checks
+            elif name in ('SOC2', 'SOC-2'):
                 findings.extend(self._check_soc2_compliance(config))
-            elif framework.upper() == 'PCI':
-                # PCI-DSS checks
+            elif name in ('PCI', 'PCI-DSS', 'PCIDSS'):
                 findings.extend(self._check_pci_compliance(config))
-        
         return findings
-    
+
     def _check_cis_compliance(self, config: Dict) -> List[Dict]:
-        """Check CIS benchmark compliance."""
-        # Placeholder for CIS checks
-        return []
-    
+        """CIS Kubernetes Benchmark-oriented checks on config/manifest text."""
+        findings = []
+        text = str(config)
+        lower = text.lower()
+
+        if 'privileged: true' in lower:
+            findings.append({
+                "type": "cis_privileged_container",
+                "severity": "HIGH",
+                "framework": "CIS",
+                "description": "Privileged container violates CIS K8s 5.2.1",
+                "recommendation": "Set privileged: false and drop capabilities",
+                "cis_benchmark": "CIS-K8s-5.2.1",
+            })
+
+        if 'runasnonroot: true' not in lower and 'runasnonroot:true' not in lower:
+            findings.append({
+                "type": "cis_run_as_non_root",
+                "severity": "MEDIUM",
+                "framework": "CIS",
+                "description": "No runAsNonRoot: true found (CIS K8s 5.2.6)",
+                "recommendation": "Set securityContext.runAsNonRoot: true",
+                "cis_benchmark": "CIS-K8s-5.2.6",
+            })
+
+        if 'allowprivilegeescalation: false' not in lower.replace(' ', ''):
+            findings.append({
+                "type": "cis_allow_privilege_escalation",
+                "severity": "MEDIUM",
+                "framework": "CIS",
+                "description": "allowPrivilegeEscalation not explicitly false (CIS K8s 5.2.5)",
+                "recommendation": "Set allowPrivilegeEscalation: false",
+                "cis_benchmark": "CIS-K8s-5.2.5",
+            })
+
+        return findings
+
     def _check_soc2_compliance(self, config: Dict) -> List[Dict]:
-        """Check SOC2 compliance."""
-        # Placeholder for SOC2 checks
-        return []
-    
+        """SOC2-oriented checks: encryption in transit, auditability of secrets."""
+        findings = []
+        lower = str(config).lower()
+
+        if re.search(r'http://(?!localhost|127\.0\.0\.1)', lower):
+            findings.append({
+                "type": "soc2_unencrypted_transport",
+                "severity": "HIGH",
+                "framework": "SOC2",
+                "description": "Plain HTTP endpoint detected (SOC2 CC6.1 encryption in transit)",
+                "recommendation": "Use HTTPS/TLS for all non-local endpoints",
+                "compliance": "SOC2-CC6.1",
+            })
+
+        if re.search(r'(password|secret|api[_-]?key)\s*[:=]\s*["\']?(?!<|{)[^\s"\']+', lower):
+            findings.append({
+                "type": "soc2_secret_in_config",
+                "severity": "CRITICAL",
+                "framework": "SOC2",
+                "description": "Possible secret material embedded in configuration (SOC2 CC6.1)",
+                "recommendation": "Store secrets in a vault / secret manager, not config files",
+                "compliance": "SOC2-CC6.1",
+            })
+
+        return findings
+
     def _check_pci_compliance(self, config: Dict) -> List[Dict]:
-        """Check PCI-DSS compliance."""
-        # Placeholder for PCI checks
-        return []
-    
+        """PCI-DSS-oriented checks: no card data patterns, TLS required."""
+        findings = []
+        text = str(config)
+        lower = text.lower()
+
+        # Very coarse PAN-like digit run (not a Luhn check — signal only)
+        if re.search(r'\b(?:\d[ -]*?){13,19}\b', text):
+            findings.append({
+                "type": "pci_possible_pan",
+                "severity": "CRITICAL",
+                "framework": "PCI",
+                "description": "Long digit sequence resembling payment card data",
+                "recommendation": "Never store PAN/CVV in configs or logs; tokenize via PCI-compliant vault",
+                "compliance": "PCI-DSS-3.4",
+            })
+
+        if re.search(r'http://(?!localhost|127\.0\.0\.1)', lower):
+            findings.append({
+                "type": "pci_unencrypted_transport",
+                "severity": "HIGH",
+                "framework": "PCI",
+                "description": "HTTP (non-TLS) endpoint may violate PCI-DSS transmission requirements",
+                "recommendation": "Enforce TLS 1.2+ for all cardholder-data environments",
+                "compliance": "PCI-DSS-4.1",
+            })
+
+        return findings
+
+    def scan_incident_context(self, context: Dict) -> Dict:
+        """Scan an agent incident context blob for security/compliance issues.
+
+        Invoked from the agent loop when ENABLE_SECURITY_SCANNING=true.
+        """
+        if not self.enabled:
+            return {"scanned": False, "reason": "Security scanning disabled"}
+
+        # Prefer explicit manifests/dockerfiles in context; else scan whole context.
+        findings: List[Dict] = []
+
+        manifest = context.get("manifest") or context.get("k8s_manifest") or ""
+        if isinstance(manifest, str) and manifest.strip():
+            result = self.scan_kubernetes_manifest(manifest)
+            findings.extend(result.get("findings", []))
+
+        dockerfile = context.get("dockerfile") or context.get("dockerfile_content") or ""
+        if isinstance(dockerfile, str) and dockerfile.strip():
+            result = self.scan_dockerfile(dockerfile)
+            findings.extend(result.get("findings", []))
+
+        # Always run config-level checks on the full context
+        cfg_result = self.scan_configuration(context)
+        if cfg_result.get("scanned"):
+            findings.extend(cfg_result.get("findings", []))
+
+        # Deduplicate by (type, description)
+        seen = set()
+        unique = []
+        for f in findings:
+            key = (f.get("type"), f.get("description"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(f)
+
+        return {
+            "scanned": True,
+            "total_findings": len(unique),
+            "findings": unique,
+            "severity_summary": self._summarize_severity(unique),
+            "compliance_enabled": self.compliance_enabled,
+            "frameworks": list(self.compliance_frameworks),
+        }
+
     def _summarize_severity(self, findings: List[Dict]) -> Dict:
         """Summarize findings by severity."""
         summary = {
@@ -304,11 +437,11 @@ class SecurityScanner:
             "MEDIUM": 0,
             "LOW": 0
         }
-        
+
         for finding in findings:
             severity = finding.get('severity', 'MEDIUM')
             summary[severity] = summary.get(severity, 0) + 1
-        
+
         return summary
 
 
