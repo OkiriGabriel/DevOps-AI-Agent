@@ -31,6 +31,7 @@ from collectors.aws import AWSCollector
 from collectors.gcp import GCPCollector
 from collectors.azure import AzureCollector
 from collectors.server import ServerCollector
+from collectors.security_scanner import SecurityScanner
 from tools.executor import SafeExecutor
 from tools.safety import check_emergency_stop_for_tool
 from tools.k8s_tools import K8sTools
@@ -417,6 +418,7 @@ class DevOpsAgent:
         
         # Existing collectors
         self.k8s_collector = K8sCollector()
+        self.security_scanner = SecurityScanner()
         self.github_collector = GitHubCollector()
         self.server_collector = ServerCollector()
         
@@ -677,6 +679,14 @@ class DevOpsAgent:
         """Enrich the incident context with collected data."""
         enriched = dict(context)
         issue_type = context.get("type")
+
+        # DevSecOps: run SecurityScanner when enabled (issue #6)
+        try:
+            scan = self.security_scanner.scan_incident_context(enriched)
+            if scan.get("scanned"):
+                enriched["security_scan"] = scan
+        except Exception as exc:  # never block incident flow on scanner errors
+            log.warning("security_scan_failed", error=str(exc))
 
         try:
             if issue_type == "k8s" and context.get("namespace"):
