@@ -115,7 +115,7 @@ On the **same EC2 instance**:
 ```bash
 # Install Python + clone repo
 sudo apt-get install -y python3 python3-pip python3-venv git
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 python3 -m venv venv

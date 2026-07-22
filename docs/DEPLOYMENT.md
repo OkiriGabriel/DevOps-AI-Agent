@@ -626,5 +626,5 @@ kubectl rollout undo deployment/devops-agent -n devops-agent
 ## Support
 
 - Documentation: [README.md](README.md)
-- Issues: [GitHub Issues](https://github.com/yourusername/devops-ai-agent/issues)
-- Discussions: [GitHub Discussions](https://github.com/yourusername/devops-ai-agent/discussions)
+- Issues: [GitHub Issues](https://github.com/open-devops-agent/open-devops-agent/issues)
+- Discussions: [GitHub Discussions](https://github.com/open-devops-agent/open-devops-agent/discussions)

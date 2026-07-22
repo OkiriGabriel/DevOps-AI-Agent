@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://github.com/okirigabriel/devops-ai-agent/workflows/CI/badge.svg)](https://github.com/okirigabriel/devops-ai-agent/actions)
+[![CI](https://github.com/open-devops-agent/open-devops-agent/workflows/CI/badge.svg)](https://github.com/open-devops-agent/open-devops-agent/actions)
 
 An autonomous **AI-powered DevOps agent** that monitors, diagnoses, and fixes incidents across your entire infrastructure stack — automatically. Built for **SRE teams** who want to reduce toil and improve MTTR (Mean Time To Recovery).
 
@@ -534,7 +534,7 @@ self.collectors['my_platform'] = MyPlatformCollector()
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 # Create virtual environment
@@ -1001,8 +1001,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support & Community
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/devops-ai-agent/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/devops-ai-agent/discussions)
+- **Issues**: [GitHub Issues](https://github.com/open-devops-agent/open-devops-agent/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/open-devops-agent/open-devops-agent/discussions)
 - **Slack**: [Join our community](https://your-slack-invite.link)
 
 ---

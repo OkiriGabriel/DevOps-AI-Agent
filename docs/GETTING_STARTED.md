@@ -31,7 +31,7 @@ pip --version
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 # Create virtual environment
@@ -549,7 +549,7 @@ If you're stuck:
 
 1. Check the [Common Issues](#common-issues) section above
 2. Review [TROUBLESHOOTING.md](DEPLOYMENT.md#troubleshooting)
-3. Search [existing issues](https://github.com/yourusername/devops-ai-agent/issues)
+3. Search [existing issues](https://github.com/open-devops-agent/open-devops-agent/issues)
 4. Open a new issue with:
    - Your environment (OS, Python version, deployment method)
    - Steps to reproduce

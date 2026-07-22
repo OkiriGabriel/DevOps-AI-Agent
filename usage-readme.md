@@ -60,7 +60,7 @@ Use this for local development, Linux servers, RHEL, and Windows (with Python in
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 # 2. Create and activate a virtual environment
@@ -104,7 +104,7 @@ pip install azure-identity azure-mgmt-compute \
 The project includes an interactive installer that installs core dependencies and prompts for cloud providers.
 
 ```bash
-git clone https://github.com/yourusername/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 python -m venv venv

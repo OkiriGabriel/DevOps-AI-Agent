@@ -55,11 +55,11 @@ Look for issues labeled with:
 
 ```bash
 # Fork the repository on GitHub, then:
-git clone https://github.com/YOUR_USERNAME/devops-ai-agent.git
+git clone https://github.com/open-devops-agent/open-devops-agent.git
 cd devops-ai-agent
 
 # Add upstream remote
-git remote add upstream https://github.com/original/devops-ai-agent.git
+git remote add upstream https://github.com/open-devops-agent/open-devops-agent.git
 ```
 
 ### 2. Create Virtual Environment

@@ -187,7 +187,7 @@ gh repo create devops-ai-agent --public --source=. --remote=origin
 
 # OR manually:
 # 1. Create repo on GitHub
-# 2. git remote add origin https://github.com/YOUR_USERNAME/devops-ai-agent.git
+# 2. git remote add origin https://github.com/open-devops-agent/open-devops-agent.git
 
 # Push to GitHub
 git push -u origin main

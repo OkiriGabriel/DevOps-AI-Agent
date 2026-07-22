@@ -176,7 +176,7 @@ gh repo create devops-ai-agent --public --source=. --remote=origin
 
 # Option 2: Manual
 # Create repo on GitHub, then:
-git remote add origin https://github.com/USERNAME/devops-ai-agent.git
+git remote add origin https://github.com/open-devops-agent/open-devops-agent.git
 ```
 
 ### 2. Push to GitHub
@@ -198,7 +198,7 @@ git push -u origin main
 Replace placeholder badges with actual ones:
 
 ```markdown
-[![CI](https://github.com/USERNAME/devops-ai-agent/workflows/CI/badge.svg)](https://github.com/USERNAME/devops-ai-agent/actions)
+[![CI](https://github.com/open-devops-agent/open-devops-agent/workflows/CI/badge.svg)](https://github.com/open-devops-agent/open-devops-agent/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 ```
