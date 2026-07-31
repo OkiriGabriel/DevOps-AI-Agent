@@ -8,11 +8,32 @@ import time
 from typing import Optional
 
 
+def _signatures_equal(expected: str, provided: str) -> bool:
+    """Compare signatures in constant time, failing closed on malformed input.
+
+    ``hmac.compare_digest`` raises ``TypeError`` when a ``str`` argument holds
+    non-ASCII characters (or is not a ``str`` at all). Header values reach us
+    latin-1-decoded, so an unauthenticated caller can trigger that with a
+    malformed signature header. Treat anything the primitive refuses to compare
+    as a mismatch instead of letting it escape as a 500.
+
+    Only a byte-for-byte match returns ``True``: the provided signature is never
+    sanitised, re-encoded lossily or truncated to make it comparable. Nothing
+    about the secret leaks here either — ``compare_digest`` validates its
+    arguments before comparing, so the timing of the ``TypeError`` depends only
+    on the caller's own input.
+    """
+    try:
+        return hmac.compare_digest(expected, provided)
+    except TypeError:
+        return False
+
+
 def verify_hmac_sha256_signature(payload: bytes, signature: str, secret: str) -> bool:
     if not secret or not signature:
         return False
     expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return _signatures_equal(expected, signature)
 
 
 def get_webhook_secret() -> str:
@@ -51,8 +72,17 @@ def verify_slack_signature(
     except (TypeError, ValueError):
         return False
 
-    basestring = f"v0:{timestamp}:{body.decode()}"
+    try:
+        decoded_body = body.decode()
+    except UnicodeDecodeError:
+        # Slack signs the UTF-8 request body, so a body that is not UTF-8 cannot
+        # carry a signature we would accept. Fail closed rather than decoding
+        # with errors="replace"/"ignore", which would change the base string —
+        # and therefore the computed signature — for legitimate traffic too.
+        return False
+
+    basestring = f"v0:{timestamp}:{decoded_body}"
     expected = "v0=" + hmac.new(
         secret.encode(), basestring.encode(), hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return _signatures_equal(expected, signature)
