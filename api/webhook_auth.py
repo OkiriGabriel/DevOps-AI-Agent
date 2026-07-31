@@ -12,7 +12,7 @@ def _signatures_equal(expected: str, provided: str) -> bool:
     """Compare signatures in constant time, failing closed on malformed input.
 
     ``hmac.compare_digest`` raises ``TypeError`` when a ``str`` argument holds
-    non-ASCII characters (or is not a ``str`` at all). Header values reach us
+    non-ASCII characters (or when only one argument is a ``str``). Header values reach us
     latin-1-decoded, so an unauthenticated caller can trigger that with a
     malformed signature header. Treat anything the primitive refuses to compare
     as a mismatch instead of letting it escape as a 500.
