@@ -66,14 +66,15 @@ jobs:
           ALLOWED_NAMESPACES=default,test
           GITLAB_TOKEN=dummy-gitlab-token
           JENKINS_URL=http://jenkins.test
-          JENKINS_USER=test
-          JENKINS_TOKEN=dummy
+          JENKINS_USERNAME=test
+          JENKINS_API_TOKEN=dummy
           BAMBOO_URL=http://bamboo.test
-          BAMBOO_TOKEN=dummy
+          BAMBOO_USERNAME=test
+          BAMBOO_PASSWORD=dummy
           AZURE_DEVOPS_ORG=test-org
-          AZURE_DEVOPS_TOKEN=dummy
-          ARGOCD_SERVER=argocd.test
-          ARGOCD_TOKEN=dummy
+          AZURE_DEVOPS_PAT=dummy
+          ARGOCD_SERVER_URL=argocd.test
+          ARGOCD_AUTH_TOKEN=dummy
           AWS_ACCESS_KEY_ID=dummy
           AWS_SECRET_ACCESS_KEY=dummy
           AWS_REGION=us-east-1
@@ -156,6 +157,7 @@ jobs:
           from collectors.gitlab import GitLabCollector
 
           collector = GitLabCollector()
+          assert collector.token, 'GitLab collector did not read GITLAB_TOKEN'
           print('GitLab Collector initialized successfully')
           print('✓ GitLab collector test passed')
           "
@@ -166,11 +168,13 @@ jobs:
           import sys
           import os
           sys.path.insert(0, '.')
-          os.environ['ARGOCD_SERVER'] = 'argocd.test'
-          os.environ['ARGOCD_TOKEN'] = 'dummy-token'
+          os.environ['ARGOCD_SERVER_URL'] = 'argocd.test'
+          os.environ['ARGOCD_AUTH_TOKEN'] = 'dummy-token'
           from collectors.argocd import ArgoCDCollector
 
           collector = ArgoCDCollector()
+          assert collector.server_url == 'argocd.test', 'ArgoCD collector did not read ARGOCD_SERVER_URL'
+          assert collector.auth_token == 'dummy-token', 'ArgoCD collector did not read ARGOCD_AUTH_TOKEN'
           print('ArgoCD Collector initialized successfully')
           print('✓ ArgoCD collector test passed')
           "
