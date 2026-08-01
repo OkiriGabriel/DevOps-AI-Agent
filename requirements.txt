@@ -12,7 +12,7 @@ pydantic>=2.7.0
 pydantic-settings>=2.3.0
 structlog>=24.2.0
 python-multipart>=0.0.9
-mcp[cli]>=1.9.0
+mcp[cli]>=1.9.0,<2.0.0
 boto3>=1.34.0
 
 # --- Object Storage (install additional based on STORAGE_PROVIDER) ---
