@@ -432,7 +432,11 @@ ORG_ID=acme-corp
 AUDIT_RETENTION_DAYS=90
 ```
 
-See `.env.example` for provider-specific settings.
+See `.env.example` for provider-specific settings — including the MinIO
+(`STORAGE_ENDPOINT_URL`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`) and Azure
+(`AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_ACCOUNT_URL`) credentials.
+It lists every variable the server reads, and
+`tests/test_env_example_coverage.py` keeps it that way.
 
 ---
 

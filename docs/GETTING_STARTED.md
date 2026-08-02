@@ -364,6 +364,11 @@ Restart service → Monitor recovery → Escalate if needed
 
 ### Environment Variables
 
+`.env.example` is the complete list of every variable the agent reads, with its
+default and what it controls — `tests/test_env_example_coverage.py` fails the
+build if code starts reading a variable that is not listed there. The excerpt
+below is only the handful you are most likely to change.
+
 Key configuration options in `.env`:
 
 ```bash
@@ -378,8 +383,8 @@ KUBECONFIG=/path/to/config          # Custom kubeconfig path
 # CI/CD Platforms
 GITLAB_TOKEN=glpat-xyz              # GitLab personal access token
 JENKINS_URL=https://jenkins.company.com
-JENKINS_USER=agent
-JENKINS_TOKEN=token
+JENKINS_USERNAME=agent
+JENKINS_API_TOKEN=token
 
 # Cloud Providers
 # See .env.example for full list
