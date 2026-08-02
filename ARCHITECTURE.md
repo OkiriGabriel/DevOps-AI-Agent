@@ -203,7 +203,10 @@ def tool_function(params: dict, dry_run: bool = True) -> dict:
 
 **Notification Tools** (`notify.py`):
 - `send_slack_notification` - Send Slack message
-- `create_pagerduty_incident` - Create PagerDuty incident
+
+**PagerDuty Tools** (`pagerduty_tools.py`):
+- `create_incident` - Create PagerDuty incident when `ESCALATION_CHANNELS`
+  includes `pagerduty`
 
 ### 6. Safe Executor (tools/executor.py)
 

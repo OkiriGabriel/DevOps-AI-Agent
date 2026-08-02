@@ -16,7 +16,7 @@ The agent automatically escalates incidents to your team when it cannot resolve 
 Set `ESCALATION_CHANNELS` (comma-separated):
 
 ```bash
-ESCALATION_CHANNELS=slack,email,jira,zoho
+ESCALATION_CHANNELS=slack,email,jira,zoho,pagerduty
 ```
 
 | Channel | What happens |
@@ -25,6 +25,10 @@ ESCALATION_CHANNELS=slack,email,jira,zoho
 | `email` | Escalation email to `EMAIL_TO` recipients |
 | `jira` | Creates Jira issue in `JIRA_PROJECT_KEY` |
 | `zoho` | Creates Zoho Desk ticket |
+| `pagerduty` | Creates PagerDuty incident on `PAGERDUTY_SERVICE_ID` |
+
+A channel whose credentials are missing is skipped, and a failing third-party
+call is caught rather than raised — one failing channel never stops the others.
 
 ## Configuration
 
@@ -54,7 +58,18 @@ ZOHO_DESK_ORG_ID=123456789
 ZOHO_ACCESS_TOKEN=your-oauth-token
 ZOHO_DEPARTMENT_ID=your-dept-id
 ZOHO_CONTACT_EMAIL=devops@company.com
+
+# PagerDuty
+PAGERDUTY_ENABLED=true
+PAGERDUTY_TOKEN=your-rest-api-key
+PAGERDUTY_SERVICE_ID=PSERVICE1
+PAGERDUTY_FROM_EMAIL=agent@company.com   # must be a valid PagerDuty user
+PAGERDUTY_URL=https://api.pagerduty.com  # https://api.eu.pagerduty.com for EU
 ```
+
+The incident is created with `incident_key` set to the agent's incident id, so
+repeat escalations of one incident carry a single deduplication key rather than
+an unrelated key per attempt.
 
 ## Database issues
 

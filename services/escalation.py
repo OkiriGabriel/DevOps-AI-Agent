@@ -20,6 +20,7 @@ from services.pii_scrubber import scrub_dict, scrub_text
 from tools.email_notifier import EmailNotifier
 from tools.jira_tools import JiraClient
 from tools.notify import SlackNotifier
+from tools.pagerduty_tools import PagerDutyClient
 from tools.zoho_tools import ZohoDeskClient
 
 log = structlog.get_logger()
@@ -62,6 +63,7 @@ class EscalationService:
         self.email = EmailNotifier()
         self.jira = JiraClient()
         self.zoho = ZohoDeskClient()
+        self.pagerduty = PagerDutyClient()
 
     def evaluate(
         self,
@@ -186,6 +188,15 @@ class EscalationService:
                 priority="High" if decision.priority != "low" else "Medium",
             )
             outcomes["channels"]["zoho"] = zoho_result
+
+        if "pagerduty" in self.channels:
+            pagerduty_result = await self.pagerduty.create_incident(
+                title=decision.summary,
+                description=decision.description,
+                priority=decision.priority,
+                incident_key=incident_id,
+            )
+            outcomes["channels"]["pagerduty"] = pagerduty_result
 
         return outcomes
 
