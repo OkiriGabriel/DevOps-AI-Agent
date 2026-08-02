@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 
 # DevOpsAgent is instantiated at import time and requires a key.
 os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-test-key")
@@ -20,6 +21,16 @@ from fastapi.testclient import TestClient
 from api.server import app
 
 SECRET = "test-webhook-secret"
+SLACK_SECRET = "slack-secret"
+
+# httpx ASCII-encodes str header values and would raise in the client before the
+# request is sent, so the non-ASCII header has to be handed over as bytes. The
+# server decodes it back to a latin-1 str, which is what reaches verification.
+NON_ASCII_SIGNATURE_HEADER = b"sha256=\xff\xfe"
+NON_ASCII_SLACK_SIGNATURE_HEADER = b"v0=\xff\xfe"
+
+# Well-formed (hex, right length) but not the expected digest.
+WRONG_SLACK_SIGNATURE = "v0=" + "0" * 64
 
 ALERTMANAGER_PAYLOAD = {
     "alerts": [
@@ -66,6 +77,23 @@ def client(monkeypatch):
 def no_secret_client(monkeypatch):
     monkeypatch.delenv("WEBHOOK_SECRET", raising=False)
     return TestClient(app)
+
+
+@pytest.fixture
+def error_reporting_client(monkeypatch):
+    """Client that surfaces an unhandled server error as a 500 response.
+
+    With the default ``raise_server_exceptions=True`` the exception propagates out
+    of the client instead, so a crash could not be distinguished from a rejection.
+    """
+    monkeypatch.setenv("WEBHOOK_SECRET", SECRET)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def slack_client(monkeypatch):
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", SLACK_SECRET)
+    return TestClient(app, raise_server_exceptions=False)
 
 
 class TestAlertmanagerWebhookAuth:
@@ -188,3 +216,42 @@ class TestGitHubWebhookRegression:
             content=body,
         )
         assert response.status_code == 200
+
+
+class TestMalformedSignatureRejected:
+    """A malformed request must be rejected with 401, never crash with a 500.
+
+    Signature verification is unauthenticated, so anything that makes it raise is
+    reachable by any caller. Fail closed: reject, do not error out.
+    """
+
+    def test_non_ascii_signature_header_rejected(self, error_reporting_client):
+        body = json.dumps(MANUAL_PAYLOAD).encode()
+        response = error_reporting_client.post(
+            "/webhook/manual",
+            headers={"X-Hub-Signature-256": NON_ASCII_SIGNATURE_HEADER},
+            content=body,
+        )
+        assert response.status_code == 401
+
+    def test_non_ascii_slack_signature_header_rejected(self, slack_client):
+        response = slack_client.post(
+            "/slack/action",
+            headers={
+                "X-Slack-Signature": NON_ASCII_SLACK_SIGNATURE_HEADER,
+                "X-Slack-Request-Timestamp": str(int(time.time())),
+            },
+            content=b"payload=%7B%7D",
+        )
+        assert response.status_code == 401
+
+    def test_non_utf8_slack_body_rejected(self, slack_client):
+        response = slack_client.post(
+            "/slack/action",
+            headers={
+                "X-Slack-Signature": WRONG_SLACK_SIGNATURE,
+                "X-Slack-Request-Timestamp": str(int(time.time())),
+            },
+            content=b"\xff\xfe",
+        )
+        assert response.status_code == 401

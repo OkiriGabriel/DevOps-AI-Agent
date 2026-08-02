@@ -20,6 +20,15 @@ from tools.executor import SafeExecutor
 from tools.safety import requires_configured_approval
 from tools.ssh_utils import build_ssh_command
 
+# Header values reach the application latin-1-decoded, so an unauthenticated
+# caller can put non-ASCII characters into a signature header.
+NON_ASCII_WEBHOOK_SIGNATURE = "sha256=\xff\xfe"
+NON_ASCII_SLACK_SIGNATURE = "v0=\xff\xfe"
+
+# Well-formed (hex, right length) but not the expected digest.
+WRONG_WEBHOOK_SIGNATURE = "sha256=" + "0" * 64
+WRONG_SLACK_SIGNATURE = "v0=" + "0" * 64
+
 
 class TestEmergencyStop:
     @pytest.mark.asyncio
@@ -75,6 +84,42 @@ class TestWebhookAuth:
         monkeypatch.delenv("WEBHOOK_SECRET", raising=False)
         assert verify_webhook_request(b"{}", None) is True
 
+    # Fail-closed invariant: any signature that is not a byte-for-byte match of the
+    # expected signature must be rejected — malformed, empty, absent or simply
+    # incorrect. No input turns a rejection into an acceptance, and none raises.
+
+    def test_rejects_non_ascii_signature(self, monkeypatch):
+        monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
+        assert verify_webhook_request(b"{}", NON_ASCII_WEBHOOK_SIGNATURE) is False
+
+    def test_rejects_non_ascii_signature_in_hmac_helper(self):
+        payload = b'{"type":"server"}'
+        assert (
+            verify_hmac_sha256_signature(payload, NON_ASCII_WEBHOOK_SIGNATURE, "test-secret")
+            is False
+        )
+
+    def test_rejects_empty_signature(self, monkeypatch):
+        monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
+        assert verify_webhook_request(b"{}", "") is False
+
+    def test_rejects_absent_signature_when_secret_configured(self, monkeypatch):
+        monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
+        assert verify_webhook_request(b"{}", None) is False
+
+    def test_accepts_correct_signature(self, monkeypatch):
+        """Regression guard: fail-closed handling must not break the accept path."""
+        secret = "test-secret"
+        monkeypatch.setenv("WEBHOOK_SECRET", secret)
+        payload = b'{"type":"server"}'
+        sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+        assert verify_webhook_request(payload, sig) is True
+
+    def test_rejects_incorrect_but_well_formed_signature(self, monkeypatch):
+        """Regression guard: fail-closed handling must not make the compare permissive."""
+        monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
+        assert verify_webhook_request(b'{"type":"server"}', WRONG_WEBHOOK_SIGNATURE) is False
+
 
 class TestSlackSignature:
     def test_valid_slack_signature(self):
@@ -96,6 +141,44 @@ class TestSlackSignature:
             secret.encode(), basestring.encode(), hashlib.sha256
         ).hexdigest()
         assert verify_slack_signature(body, timestamp, signature, secret) is False
+
+    # Same fail-closed invariant as TestWebhookAuth. The accept path is guarded by
+    # test_valid_slack_signature above, which must keep passing.
+
+    def test_rejects_non_ascii_signature(self):
+        timestamp = str(int(time.time()))
+        assert (
+            verify_slack_signature(
+                b"payload=%7B%7D", timestamp, NON_ASCII_SLACK_SIGNATURE, "slack-secret"
+            )
+            is False
+        )
+
+    def test_rejects_empty_signature(self):
+        timestamp = str(int(time.time()))
+        assert verify_slack_signature(b"payload=%7B%7D", timestamp, "", "slack-secret") is False
+
+    def test_rejects_absent_signature(self):
+        timestamp = str(int(time.time()))
+        assert verify_slack_signature(b"payload=%7B%7D", timestamp, None, "slack-secret") is False
+
+    def test_rejects_incorrect_but_well_formed_signature(self):
+        """Regression guard: fail-closed handling must not make the compare permissive."""
+        timestamp = str(int(time.time()))
+        assert (
+            verify_slack_signature(
+                b"payload=%7B%7D", timestamp, WRONG_SLACK_SIGNATURE, "slack-secret"
+            )
+            is False
+        )
+
+    def test_rejects_non_utf8_body(self):
+        """A body that is not UTF-8 must be rejected, not decoded lossily and not raise."""
+        timestamp = str(int(time.time()))
+        assert (
+            verify_slack_signature(b"\xff\xfe", timestamp, WRONG_SLACK_SIGNATURE, "slack-secret")
+            is False
+        )
 
 
 class TestSshUtils:
