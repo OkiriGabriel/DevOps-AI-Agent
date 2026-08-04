@@ -13,8 +13,38 @@ All incident data is **org-scoped** and stored in cloud object storage (S3, MinI
 | `/health`, `/audit` | None (restrict in production via network policy) |
 | `/orgs/*` | None by default — add API gateway auth in production |
 | `/webhook/github` | `X-Hub-Signature-256` when `WEBHOOK_SECRET` is set |
-| `/webhook/manual`, `/webhook/alertmanager` | Optional `X-Org-ID` header |
-| `/slack/action` | Called by Slack (configure in Slack app settings) |
+| `/webhook/manual`, `/webhook/alertmanager` | `X-Hub-Signature-256` **or** `X-Webhook-Signature` when `WEBHOOK_SECRET` is set |
+| `/slack/action` | `X-Slack-Signature` + `X-Slack-Request-Timestamp` when `SLACK_SIGNING_SECRET` is set (configured in Slack app settings) |
+
+`X-Org-ID` is **not** authentication — it only selects the organization (see
+[Org scoping](#org-scoping)) and is optional on every webhook.
+
+### Webhook signatures
+
+When `WEBHOOK_SECRET` is set, signed webhook endpoints require a hex HMAC-SHA256 of the
+**raw request body**, keyed with `WEBHOOK_SECRET` and prefixed `sha256=`:
+
+```bash
+BODY='{"type":"k8s","namespace":"production"}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+
+curl -X POST http://localhost:8000/webhook/manual \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: $SIG" \
+  -d "$BODY"
+```
+
+- A missing, malformed, or mismatched signature is rejected with **401** `{"detail": "Invalid signature"}`.
+- `/webhook/manual` and `/webhook/alertmanager` accept either header, but `X-Hub-Signature-256`
+  **takes precedence**: if it is present and invalid, `X-Webhook-Signature` is not consulted and the
+  request is rejected. `/webhook/github` accepts only `X-Hub-Signature-256`.
+- When `WEBHOOK_SECRET` is unset or empty, signature verification is skipped entirely and unsigned
+  requests are accepted. Leave it unset only for local testing.
+
+`/slack/action` uses Slack's own scheme instead (`v0=` HMAC-SHA256 over
+`v0:{timestamp}:{body}` keyed with `SLACK_SIGNING_SECRET`, rejecting timestamps more than
+5 minutes from the server clock), and returns **401** `{"detail": "Invalid Slack signature"}`
+on failure.
 
 ---
 
@@ -247,6 +277,7 @@ Manually trigger an incident.
 | Header | Required | Description |
 |--------|----------|-------------|
 | `Content-Type` | Yes | `application/json` |
+| `X-Hub-Signature-256` or `X-Webhook-Signature` | If `WEBHOOK_SECRET` set | HMAC SHA-256 signature of the raw body (see [Webhook signatures](#webhook-signatures)) |
 | `X-Org-ID` | No | Organization ID |
 
 **Request body:**
@@ -276,6 +307,9 @@ curl -X POST http://localhost:8000/webhook/manual \
   }'
 ```
 
+This unsigned example is accepted only while `WEBHOOK_SECRET` is unset; otherwise add a
+signature header as shown under [Webhook signatures](#webhook-signatures).
+
 **Response 200:**
 
 ```json
@@ -288,13 +322,21 @@ curl -X POST http://localhost:8000/webhook/manual \
 
 **Response 400:** Missing `type` field.
 
+**Response 401:** Missing or invalid webhook signature (when `WEBHOOK_SECRET` is set).
+
 ---
 
 ### `POST /webhook/alertmanager`
 
 Receive Prometheus Alertmanager alerts.
 
-**Headers:** `X-Org-ID` (optional)
+**Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Type` | Yes | `application/json` |
+| `X-Hub-Signature-256` or `X-Webhook-Signature` | If `WEBHOOK_SECRET` set | HMAC SHA-256 signature of the raw body (see [Webhook signatures](#webhook-signatures)) |
+| `X-Org-ID` | No | Organization ID |
 
 **Request body:** Standard Alertmanager webhook JSON.
 
@@ -327,6 +369,8 @@ curl -X POST http://localhost:8000/webhook/alertmanager \
   "incident_ids": ["INC-20260617120000-a1b2c3"]
 }
 ```
+
+**Response 401:** Missing or invalid webhook signature (when `WEBHOOK_SECRET` is set).
 
 ---
 
@@ -373,9 +417,21 @@ Slack interactive button callback for approval workflow.
 
 **Content-Type:** `application/x-www-form-urlencoded`
 
+**Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Slack-Signature` | If `SLACK_SIGNING_SECRET` set | Slack `v0=` request signature |
+| `X-Slack-Request-Timestamp` | If `SLACK_SIGNING_SECRET` set | Unix seconds; rejected if more than 5 minutes from the server clock |
+
 **Form field:** `payload` — JSON string from Slack.
 
-Normally configured in your Slack app as the Interactivity Request URL.
+Normally configured in your Slack app as the Interactivity Request URL. Slack sends both
+headers on interactive payloads; set `SLACK_SIGNING_SECRET` to the app's signing secret to
+have them verified.
+
+**Response 401:** Missing, stale, or invalid Slack signature (when `SLACK_SIGNING_SECRET` is set).
+When the secret is unset, verification is skipped entirely.
 
 ---
 
