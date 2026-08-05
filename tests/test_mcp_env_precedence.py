@@ -27,11 +27,11 @@ def test_explicit_host_port_beat_env(monkeypatch, stubbed_mcp):
     monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
     monkeypatch.setenv("FASTMCP_PORT", "8888")
 
-    run_mcp(transport="sse", host="0.0.0.0", port=9999)
+    run_mcp(transport="sse", host="203.0.113.7", port=9999)
 
     import os
 
-    assert os.environ["FASTMCP_HOST"] == "0.0.0.0"
+    assert os.environ["FASTMCP_HOST"] == "203.0.113.7"
     assert os.environ["FASTMCP_PORT"] == "9999"
     stubbed_mcp.run.assert_called_once_with(transport="sse")
 
@@ -71,7 +71,7 @@ def test_cli_explicit_flags_beat_env(monkeypatch, stubbed_mcp):
     monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
     monkeypatch.setenv("FASTMCP_PORT", "8888")
     monkeypatch.setattr(
-        sys, "argv", ["devops-agent", "mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "9999"]
+        sys, "argv", ["devops-agent", "mcp", "--transport", "sse", "--host", "203.0.113.7", "--port", "9999"]
     )
 
     with pytest.raises(SystemExit) as excinfo:
@@ -80,7 +80,7 @@ def test_cli_explicit_flags_beat_env(monkeypatch, stubbed_mcp):
     import os
 
     assert excinfo.value.code == 0
-    assert os.environ["FASTMCP_HOST"] == "0.0.0.0"
+    assert os.environ["FASTMCP_HOST"] == "203.0.113.7"
     assert os.environ["FASTMCP_PORT"] == "9999"
     stubbed_mcp.run.assert_called_once_with(transport="sse")
 
