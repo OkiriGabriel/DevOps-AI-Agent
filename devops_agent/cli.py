@@ -10,9 +10,18 @@ import argparse
 import os
 import sys
 
+from dotenv import load_dotenv
+
 
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
+
+    # Load .env before reading HOST/PORT/UVICORN_WORKERS: the load_dotenv() in
+    # api/server.py runs too late, as uvicorn imports "api.server:app" by
+    # string only after these values are read. Real environment variables
+    # still win (load_dotenv does not override), and the CLI flags win over
+    # both via the `args.x or os.getenv(...)` fallbacks below.
+    load_dotenv()
 
     # Local default binds loopback; set HOST=0.0.0.0 for Docker/K8s ingress.
     host = args.host or os.getenv("HOST", "127.0.0.1")
