@@ -67,8 +67,8 @@ def create_mcp_server() -> FastMCP:
 
 def run_mcp(
     transport: str = "stdio",
-    host: str = "127.0.0.1",
-    port: int = 8090,
+    host: str | None = None,
+    port: int | None = None,
 ) -> None:
     mcp = create_mcp_server()
 
@@ -77,8 +77,16 @@ def run_mcp(
         return
 
     if transport in ("sse", "streamable-http"):
-        os.environ.setdefault("FASTMCP_HOST", host)
-        os.environ.setdefault("FASTMCP_PORT", str(port))
+        # Explicit host/port beat the environment; FASTMCP_HOST/FASTMCP_PORT
+        # (e.g. from .env) supply the value only when no flag was passed.
+        if host is not None:
+            os.environ["FASTMCP_HOST"] = host
+        else:
+            os.environ.setdefault("FASTMCP_HOST", "127.0.0.1")
+        if port is not None:
+            os.environ["FASTMCP_PORT"] = str(port)
+        else:
+            os.environ.setdefault("FASTMCP_PORT", "8090")
         mcp.run(transport=transport)
         return
 

@@ -1,0 +1,102 @@
+"""
+Precedence tests for the MCP bind address: explicit --host/--port flags must
+beat FASTMCP_HOST/FASTMCP_PORT from the environment (e.g. loaded from .env),
+which in turn beat the built-in defaults 127.0.0.1/8090.
+"""
+from __future__ import annotations
+
+import sys
+from unittest.mock import MagicMock
+
+import pytest
+
+
+@pytest.fixture
+def stubbed_mcp(monkeypatch):
+    """Stub only server creation; the os.environ handling in run_mcp runs for real."""
+    import devops_mcp.server
+
+    mcp = MagicMock()
+    monkeypatch.setattr(devops_mcp.server, "create_mcp_server", lambda: mcp)
+    return mcp
+
+
+def test_explicit_host_port_beat_env(monkeypatch, stubbed_mcp):
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+
+    run_mcp(transport="sse", host="0.0.0.0", port=9999)
+
+    import os
+
+    assert os.environ["FASTMCP_HOST"] == "0.0.0.0"
+    assert os.environ["FASTMCP_PORT"] == "9999"
+    stubbed_mcp.run.assert_called_once_with(transport="sse")
+
+
+def test_env_used_when_flags_absent(monkeypatch, stubbed_mcp):
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+
+    run_mcp(transport="sse")
+
+    import os
+
+    assert os.environ["FASTMCP_HOST"] == "203.0.113.9"
+    assert os.environ["FASTMCP_PORT"] == "8888"
+
+
+def test_defaults_when_no_env_and_no_flags(monkeypatch, stubbed_mcp):
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.delenv("FASTMCP_HOST", raising=False)
+    monkeypatch.delenv("FASTMCP_PORT", raising=False)
+
+    run_mcp(transport="streamable-http")
+
+    import os
+
+    assert os.environ["FASTMCP_HOST"] == "127.0.0.1"
+    assert os.environ["FASTMCP_PORT"] == "8090"
+
+
+def test_cli_explicit_flags_beat_env(monkeypatch, stubbed_mcp):
+    """The issue #40 repro: drive the real CLI with real argv, stub only the server."""
+    from devops_agent.cli import main
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+    monkeypatch.setattr(
+        sys, "argv", ["devops-agent", "mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "9999"]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    import os
+
+    assert excinfo.value.code == 0
+    assert os.environ["FASTMCP_HOST"] == "0.0.0.0"
+    assert os.environ["FASTMCP_PORT"] == "9999"
+    stubbed_mcp.run.assert_called_once_with(transport="sse")
+
+
+def test_cli_env_used_when_flags_absent(monkeypatch, stubbed_mcp):
+    from devops_agent.cli import main
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+    monkeypatch.setattr(sys, "argv", ["devops-agent", "mcp", "--transport", "sse"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    import os
+
+    assert excinfo.value.code == 0
+    assert os.environ["FASTMCP_HOST"] == "203.0.113.9"
+    assert os.environ["FASTMCP_PORT"] == "8888"

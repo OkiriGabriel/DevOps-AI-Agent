@@ -68,8 +68,17 @@ def main() -> None:
         default="stdio",
         help="MCP transport (default: stdio)",
     )
-    mcp.add_argument("--host", default="127.0.0.1", help="Bind host for HTTP transports")
-    mcp.add_argument("--port", type=int, default=8090, help="Bind port for HTTP transports")
+    mcp.add_argument(
+        "--host",
+        default=None,
+        help="Bind host for HTTP transports (default: 127.0.0.1, or FASTMCP_HOST env)",
+    )
+    mcp.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Bind port for HTTP transports (default: 8090, or FASTMCP_PORT env)",
+    )
     mcp.set_defaults(func=cmd_mcp)
 
     ver = sub.add_parser("version", help="Print package version")
