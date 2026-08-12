@@ -27,16 +27,25 @@ SERVE_ENV_VARS = ("HOST", "PORT", "UVICORN_WORKERS")
 @pytest.fixture
 def dotenv_file(monkeypatch):
     """Provide a repo-root .env with the three serve settings, and guarantee
-    none of them leaks in from the ambient shell environment."""
+    none of them leaks in from the ambient shell environment.
+
+    A pre-existing repo-root .env (CI's dummy-env step creates one before
+    pytest) is tolerated: its exact bytes are restored after the test. When
+    none existed, the file is removed again, so the absent-file case keeps
+    its original isolation.
+    """
     for name in SERVE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     env_path = REPO_ROOT / ".env"
-    assert not env_path.exists(), "repo checkout unexpectedly contains a .env"
+    original_bytes = env_path.read_bytes() if env_path.exists() else None
     env_path.write_text("HOST=203.0.113.7\nPORT=7777\nUVICORN_WORKERS=9\n")
     try:
         yield env_path
     finally:
-        env_path.unlink()
+        if original_bytes is None:
+            env_path.unlink()
+        else:
+            env_path.write_bytes(original_bytes)
 
 
 def _run_serve(*argv: str) -> dict:
