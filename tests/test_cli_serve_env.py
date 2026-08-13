@@ -8,8 +8,10 @@ HOST/PORT/UVICORN_WORKERS from .env.
 
 These tests drive the real `devops_agent.cli.main()` with real argv; only
 `uvicorn.run` is stubbed. The `.env` is written to the repo root because
-`load_dotenv()` anchors its upward search at the calling module (`cli.py`),
-which lives under the repo root — the same layout the CLI runs in.
+`cmd_serve` loads `Path.cwd() / ".env"` explicitly and pytest runs with the
+repo root as cwd — the same layout a source-checkout run of the CLI sees.
+`test_serve_reads_dotenv_from_invocation_cwd` covers the installed layout,
+where the module lives outside the directory containing `.env`.
 """
 
 import sys

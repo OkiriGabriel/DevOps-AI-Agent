@@ -9,6 +9,7 @@ Usage:
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,7 +22,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # string only after these values are read. Real environment variables
     # still win (load_dotenv does not override), and the CLI flags win over
     # both via the `args.x or os.getenv(...)` fallbacks below.
-    load_dotenv()
+    # The path is explicit: a bare load_dotenv() anchors its upward search at
+    # this module, so after installation it would find site-packages' parents
+    # and never the user's .env in the invocation directory.
+    load_dotenv(Path.cwd() / ".env")
 
     # Local default binds loopback; set HOST=0.0.0.0 for Docker/K8s ingress.
     host = args.host or os.getenv("HOST", "127.0.0.1")
