@@ -17,7 +17,7 @@ def stubbed_mcp(monkeypatch):
     import devops_mcp.server
 
     mcp = MagicMock()
-    monkeypatch.setattr(devops_mcp.server, "create_mcp_server", lambda: mcp)
+    monkeypatch.setattr(devops_mcp.server, "create_mcp_server", lambda **_kwargs: mcp)
     return mcp
 
 
@@ -100,3 +100,47 @@ def test_cli_env_used_when_flags_absent(monkeypatch, stubbed_mcp):
     assert excinfo.value.code == 0
     assert os.environ["FASTMCP_HOST"] == "203.0.113.9"
     assert os.environ["FASTMCP_PORT"] == "8888"
+
+
+@pytest.fixture
+def captured_bind(monkeypatch):
+    """Capture the address the REAL server would bind, without starting it.
+
+    create_mcp_server runs for real; only FastMCP.run is monkeypatched, so the
+    FastMCP instance's frozen settings (host/port) are asserted directly.
+    """
+    from mcp.server.fastmcp import FastMCP
+
+    captured = {}
+
+    def fake_run(self, transport=None, **_kwargs):
+        captured["host"] = self.settings.host
+        captured["port"] = self.settings.port
+        captured["transport"] = transport
+
+    monkeypatch.setattr(FastMCP, "run", fake_run)
+    return captured
+
+
+def test_real_server_env_used_when_flags_absent(monkeypatch, captured_bind):
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+
+    run_mcp(transport="sse")
+
+    assert captured_bind["host"] == "203.0.113.9"
+    assert captured_bind["port"] == 8888
+
+
+def test_real_server_explicit_flags_beat_env(monkeypatch, captured_bind):
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.setenv("FASTMCP_HOST", "203.0.113.9")
+    monkeypatch.setenv("FASTMCP_PORT", "8888")
+
+    run_mcp(transport="sse", host="203.0.113.7", port=9999)
+
+    assert captured_bind["host"] == "203.0.113.7"
+    assert captured_bind["port"] == 9999
