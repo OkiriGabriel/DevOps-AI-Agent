@@ -87,3 +87,23 @@ def test_serve_defaults_unchanged_without_dotenv(monkeypatch):
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["port"] == 8000
     assert kwargs["workers"] == 2
+
+
+def test_serve_reads_dotenv_from_invocation_cwd(tmp_path, monkeypatch):
+    """The installed CLI must read `.env` from the directory the user runs it in.
+
+    Simulates the package living outside the directory containing `.env`:
+    the module stays where it is installed (here: this clone, which pytest
+    imported), while the process cwd is an unrelated invocation directory
+    holding the only `.env`. A bare `load_dotenv()` anchors its upward
+    search at the calling module, so this `.env` is silently ignored after
+    a normal installation and uvicorn starts on its defaults.
+    """
+    for name in SERVE_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".env").write_text("HOST=203.0.113.7\nPORT=7777\nUVICORN_WORKERS=9\n")
+    monkeypatch.chdir(tmp_path)
+    kwargs = _run_serve()
+    assert kwargs["host"] == "203.0.113.7"
+    assert kwargs["port"] == 7777
+    assert kwargs["workers"] == 9
