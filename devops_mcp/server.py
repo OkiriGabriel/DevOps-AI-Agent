@@ -73,9 +73,12 @@ def run_mcp(
     port: int | None = None,
 ) -> None:
     if transport == "stdio":
-        resolved_host = host if host is not None else os.environ.get("FASTMCP_HOST", "127.0.0.1")
-        resolved_port = port if port is not None else int(os.environ.get("FASTMCP_PORT", "8090"))
-        mcp = create_mcp_server(host=resolved_host, port=resolved_port)
+        # stdio never binds TCP, so FASTMCP_HOST/FASTMCP_PORT are irrelevant
+        # on this path: do not read, parse, validate, or mutate them.
+        mcp = create_mcp_server(
+            host=host if host is not None else "127.0.0.1",
+            port=port if port is not None else 8090,
+        )
         mcp.run(transport="stdio")
         return
 
