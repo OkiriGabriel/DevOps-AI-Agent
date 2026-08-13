@@ -144,3 +144,19 @@ def test_real_server_explicit_flags_beat_env(monkeypatch, captured_bind):
 
     assert captured_bind["host"] == "203.0.113.7"
     assert captured_bind["port"] == 9999
+
+
+def test_real_server_stdio_ignores_invalid_env_port(monkeypatch, captured_bind):
+    """stdio never binds TCP: an unparseable FASTMCP_PORT must not raise.
+
+    Regression: the stdio branch used to resolve int(FASTMCP_PORT) even though
+    the value is never used to bind, so FASTMCP_PORT=not-an-integer raised
+    ValueError before the server could run.
+    """
+    from devops_mcp.server import run_mcp
+
+    monkeypatch.setenv("FASTMCP_PORT", "not-an-integer")
+
+    run_mcp(transport="stdio")
+
+    assert captured_bind["transport"] == "stdio"
