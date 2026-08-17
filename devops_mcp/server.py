@@ -41,10 +41,12 @@ Org runbooks: list_org_docs / get_org_doc. Audit history: get_incident_audit.
 """
 
 
-def create_mcp_server() -> FastMCP:
+def create_mcp_server(host: str, port: int) -> FastMCP:
     mcp = FastMCP(
         name="devops-ai-agent",
         instructions=INSTRUCTIONS,
+        host=host,
+        port=port,
     )
 
     agent = DevOpsAgent()
@@ -67,18 +69,35 @@ def create_mcp_server() -> FastMCP:
 
 def run_mcp(
     transport: str = "stdio",
-    host: str = "127.0.0.1",
-    port: int = 8090,
+    host: str | None = None,
+    port: int | None = None,
 ) -> None:
-    mcp = create_mcp_server()
-
     if transport == "stdio":
+        # stdio never binds TCP, so FASTMCP_HOST/FASTMCP_PORT are irrelevant
+        # on this path: do not read, parse, validate, or mutate them.
+        mcp = create_mcp_server(
+            host=host if host is not None else "127.0.0.1",
+            port=port if port is not None else 8090,
+        )
         mcp.run(transport="stdio")
         return
 
     if transport in ("sse", "streamable-http"):
-        os.environ.setdefault("FASTMCP_HOST", host)
-        os.environ.setdefault("FASTMCP_PORT", str(port))
+        # Explicit host/port beat the environment; FASTMCP_HOST/FASTMCP_PORT
+        # (e.g. from .env) supply the value only when no flag was passed.
+        # FastMCP 1.x freezes settings at construction time, so resolve the
+        # bind address first and pass it explicitly to create_mcp_server.
+        if host is not None:
+            os.environ["FASTMCP_HOST"] = host
+        else:
+            os.environ.setdefault("FASTMCP_HOST", "127.0.0.1")
+            host = os.environ["FASTMCP_HOST"]
+        if port is not None:
+            os.environ["FASTMCP_PORT"] = str(port)
+        else:
+            os.environ.setdefault("FASTMCP_PORT", "8090")
+            port = int(os.environ["FASTMCP_PORT"])
+        mcp = create_mcp_server(host=host, port=port)
         mcp.run(transport=transport)
         return
 
