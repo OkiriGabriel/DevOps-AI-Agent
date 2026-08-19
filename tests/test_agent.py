@@ -211,7 +211,7 @@ class TestFixVerification:
     async def test_successful_remediation_triggers_verification(self):
         verification_result = {
             "verified": True, "status": "success", "incident_type": "k8s",
-            "fix_applied": "run_kubectl", "monitoring_period": 0,
+            "fix_applied": "run_kubectl", "monitoring_period": 300,
             "timestamp": "2026-08-19T00:00:00", "checks_performed": [],
         }
         with (
@@ -231,13 +231,14 @@ class TestFixVerification:
                 incident_id="INC-VERIFY-001", resume=False,
             )
 
-            # Exactly one verifier call, incident-derived expected state, bounded duration.
+            # Exactly one verifier call, incident-derived expected state, and the
+            # documented 300-second (5-minute) stability window.
             mock_verify.assert_awaited_once()
             assert mock_verify.await_args.kwargs == {
                 "incident_type": "k8s",
                 "fix_applied": "run_kubectl",
                 "expected_state": {"pod_name": "api-pod", "namespace": "production", "pod_status": "Running"},
-                "monitoring_duration": 0,
+                "monitoring_duration": 300,
             }
             # The same structured value reaches the completed result, the
             # incident audit trail, and the Slack completion payload.
@@ -279,3 +280,76 @@ class TestFixVerification:
             assert result.get("verification") is None
             assert [k for k in storage.list_keys("test-org/logs") if k.endswith("verification.json")] == []
             agent.notifier.send_message.assert_not_called()
+
+
+# ─── Issue #7 regressions: canonical audit surface and stability stage ────────
+
+class TestVerificationAuditAndStability:
+    """The queue completion mapper must place the structured verification result
+    into the canonical org-scoped audit entry (the surface returned by GET /audit),
+    and the agent's configured stability window must make at least one
+    post-immediate observation before reporting stability."""
+
+    @pytest.mark.asyncio
+    async def test_canonical_audit_entry_contains_verification(self):
+        import api.server as server
+        from services.incident_store import IncidentStore
+        from storage.memory_storage import MemoryStorage
+
+        verification = {
+            "verified": True,
+            "status": "success",
+            "checks_performed": [{"check_type": "immediate", "passed": True}],
+        }
+        result = {
+            "diagnosis": "OOM remediated", "actions": [], "resolved": True,
+            "fix_applied": True, "verification": verification,
+        }
+        store = IncidentStore(MemoryStorage())
+        decision = MagicMock(should_escalate=False, duration_minutes=1.0, reasons=[])
+        with (
+            patch.object(server, "agent") as mock_agent,
+            patch.object(server, "escalation_service") as mock_escalation,
+            patch.object(server, "incident_queue") as mock_queue,
+            patch.object(server, "notifier") as mock_notifier,
+            patch.object(server, "incident_store", store),
+        ):
+            mock_agent.run = AsyncMock(return_value=result)
+            mock_escalation.evaluate.return_value = decision
+            mock_queue.mark_completed = MagicMock()
+            mock_notifier.send_resolution = AsyncMock()
+            await server._process_incident_with_org_creds(
+                {"incident_id": "INC-AUDIT-1", "org_id": "test-org"},
+                "INC-AUDIT-1", "test-org", {"type": "k8s", "org_id": "test-org"}, None,
+            )
+            response = await server.get_audit(org_id="test-org")
+
+        assert response["total"] == 1
+        assert response["events"][0].get("verification") == verification
+
+    @pytest.mark.asyncio
+    async def test_stability_stage_observes_with_agent_configured_duration(self):
+        from agent.core import FIX_VERIFICATION_MONITORING_SECONDS
+        from tools.fix_verifier import FixVerifier
+
+        fake_clock = MagicMock()
+        fake_clock.time.side_effect = (tick * 31.0 for tick in range(64))
+        fake_asyncio = MagicMock()
+        fake_asyncio.sleep = AsyncMock()
+        with (
+            patch("tools.fix_verifier.time", fake_clock),
+            patch("tools.fix_verifier.asyncio", fake_asyncio),
+        ):
+            result = await FixVerifier().verify_fix(
+                incident_type="cicd",
+                fix_applied="rerun_pipeline",
+                expected_state={},
+                monitoring_duration=FIX_VERIFICATION_MONITORING_SECONDS,
+            )
+
+        assert result["status"] == "success"
+        stability = result["checks_performed"][1]
+        assert stability["stable"] is True
+        assert stability["checks_performed"] >= 1, (
+            "stability was reported without observing the remediated state even once"
+        )
