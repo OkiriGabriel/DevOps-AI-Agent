@@ -4,10 +4,11 @@ Receives events from GitHub, Alertmanager, and manual triggers.
 Durable queue + cloud storage for audit, logs, checkpoints, and org docs.
 """
 import asyncio
+import inspect
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 import structlog
 from dotenv import load_dotenv
@@ -45,7 +46,10 @@ org_config = OrgConfig()
 escalation_service = EscalationService()
 
 _queue_worker_task: Optional[asyncio.Task] = None
+_retention_task: Optional[asyncio.Task] = None
 _queue_running = False
+
+RETENTION_INTERVAL_SEC = 24 * 60 * 60  # one retention pass per day
 
 
 def _org_id(context: dict, header_org: Optional[str] = None) -> str:
@@ -157,6 +161,46 @@ async def _queue_worker_loop():
         await asyncio.sleep(poll_interval)
 
 
+def _retention_org_ids() -> List[str]:
+    """Orgs to sweep: de-duplicated union of ORG_ID and comma-separated ORG_IDS.
+
+    Mirrors the env parsing in IncidentQueue.list_pending_org_ids.
+    """
+    orgs = [os.getenv("ORG_ID", "default")]
+    for org in os.getenv("ORG_IDS", "").split(","):
+        org = org.strip()
+        if org and org not in orgs:
+            orgs.append(org)
+    return orgs
+
+
+async def run_retention_pass():
+    """Run one retention pass over every configured org.
+
+    A storage failure for one org is logged and does not stop the pass
+    from attempting the remaining orgs; cancellation is never swallowed.
+    """
+    for org_id in _retention_org_ids():
+        try:
+            deleted = incident_store.apply_retention(org_id)
+            if inspect.isawaitable(deleted):
+                await deleted
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.error("Retention cleanup failed", org_id=org_id, error=str(e))
+
+
+async def _retention_loop():
+    """Background retention scheduler — one pass at startup, then every 24 hours."""
+    while True:
+        try:
+            await run_retention_pass()
+        except Exception as e:
+            log.error("Retention pass error", error=str(e))
+        await asyncio.sleep(RETENTION_INTERVAL_SEC)
+
+
 async def enqueue_incident(context: dict, incident_id: Optional[str] = None) -> str:
     org = _org_id(context)
     context = dict(context)
@@ -166,18 +210,20 @@ async def enqueue_incident(context: dict, incident_id: Optional[str] = None) -> 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _queue_worker_task
+    global _queue_worker_task, _retention_task
     log.info("DevOps AI Agent starting", auto_apply=os.getenv("AUTO_APPLY", "false"))
     _queue_worker_task = asyncio.create_task(_queue_worker_loop())
+    _retention_task = asyncio.create_task(_retention_loop())
     yield
     global _queue_running
     _queue_running = False
-    if _queue_worker_task:
-        _queue_worker_task.cancel()
-        try:
-            await _queue_worker_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_queue_worker_task, _retention_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     log.info("DevOps AI Agent shutting down")
 
 
