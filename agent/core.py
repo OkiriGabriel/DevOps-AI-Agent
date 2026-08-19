@@ -400,9 +400,9 @@ AGENT_TOOLS = [
 ]
 
 
-# Bounded stability-monitoring window for post-remediation verification: zero
-# keeps the agent loop on FixVerifier's immediate checks, never its 300s default.
-FIX_VERIFICATION_MONITORING_SECONDS = 0
+# Stability-monitoring window for post-remediation verification: the documented
+# 300-second (5-minute) window advertised in README and SECURITY_GUARANTEES.
+FIX_VERIFICATION_MONITORING_SECONDS = 300
 
 
 def _verification_expected_state(issue_type: str, context: dict) -> dict:
