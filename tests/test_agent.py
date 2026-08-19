@@ -166,3 +166,197 @@ class TestAgentLoop:
             assert result["grounding"]["grounded"] is True
             assert len(result["suggested_fixes"]) == 1
             assert result["suggestions_only"] is True
+
+
+# ─── Issue #7: post-remediation FixVerifier integration ───────────────────────
+
+class TestFixVerification:
+    """FixVerifier.verify_fix runs once after successful remediation, never on
+    a suggestions-only run, and its structured result reaches the completed
+    result, the incident audit trail, and the Slack completion payload."""
+
+    @staticmethod
+    def _tool_response(name, tool_id, inputs):
+        block = MagicMock()
+        block.type = "tool_use"
+        block.name = name
+        block.id = tool_id
+        block.input = inputs
+        response = MagicMock()
+        response.stop_reason = "tool_use"
+        response.content = [block]
+        return response
+
+    @staticmethod
+    def _end_response(text):
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.content = [MagicMock(type="text", text=text)]
+        return response
+
+    @staticmethod
+    def _k8s_agent():
+        from agent.core import DevOpsAgent
+        from services.incident_store import IncidentStore
+        from services.org_docs import OrgDocs
+        from storage.memory_storage import MemoryStorage
+
+        agent = DevOpsAgent()
+        agent.k8s_collector.collect = AsyncMock(
+            return_value={"pods": [{"name": "api-pod", "reason": "OOMKilled"}]}
+        )
+        agent.k8s_tools.run_kubectl = AsyncMock(
+            return_value={"success": True, "stdout": "deployment.apps/api restarted"}
+        )
+        agent.notifier.send_message = AsyncMock()
+        agent.notifier.send_fix_suggestion = AsyncMock()
+        storage = MemoryStorage()
+        agent.incident_store = IncidentStore(storage)
+        agent.org_docs = OrgDocs(MemoryStorage())
+        return agent, storage
+
+    @pytest.mark.asyncio
+    async def test_successful_remediation_triggers_verification(self):
+        import os
+
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-dummy-key-for-testing"
+
+        verification_result = {
+            "verified": True,
+            "status": "success",
+            "incident_type": "k8s",
+            "fix_applied": "run_kubectl",
+            "monitoring_period": 0,
+            "timestamp": "2026-08-19T00:00:00",
+            "checks_performed": [],
+        }
+
+        with (
+            patch("anthropic.Anthropic") as mock_anthropic,
+            patch(
+                "tools.fix_verifier.FixVerifier.verify_fix",
+                new=AsyncMock(return_value=verification_result),
+            ) as mock_verify,
+        ):
+            mock_client = MagicMock()
+            mock_anthropic.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                self._tool_response(
+                    "get_k8s_context", "tool_1", {"namespace": "production"}
+                ),
+                self._tool_response(
+                    "run_kubectl",
+                    "tool_2",
+                    {"command": "rollout restart deployment/api -n production"},
+                ),
+                self._end_response(
+                    "Evidence: get_k8s_context showed OOMKilled on api-pod.\n"
+                    "Restarted the deployment via run_kubectl; rollout complete."
+                ),
+            ]
+            agent, storage = self._k8s_agent()
+
+            result = await agent.run(
+                {
+                    "type": "k8s",
+                    "namespace": "production",
+                    "pod": "api-pod",
+                    "org_id": "test-org",
+                },
+                incident_id="INC-VERIFY-001",
+                resume=False,
+            )
+
+            # Verifier awaited exactly once with the incident-derived expected
+            # state and a bounded monitoring duration (never the 300s default).
+            mock_verify.assert_awaited_once()
+            assert mock_verify.await_args.kwargs == {
+                "incident_type": "k8s",
+                "fix_applied": "run_kubectl",
+                "expected_state": {
+                    "pod_name": "api-pod",
+                    "namespace": "production",
+                    "pod_status": "Running",
+                },
+                "monitoring_duration": 0,
+            }
+
+            # The same structured value lands in the completed result ...
+            assert result["fix_applied"] is True
+            assert result["verification"] == verification_result
+
+            # ... in the incident audit trail ...
+            verification_keys = [
+                key
+                for key in storage.list_keys("test-org/logs")
+                if key.endswith("verification.json")
+            ]
+            assert len(verification_keys) == 1
+            assert storage.get_json(verification_keys[0]) == verification_result
+
+            # ... and in the Slack completion payload.
+            agent.notifier.send_message.assert_awaited_once()
+            slack_message = agent.notifier.send_message.await_args.args[0]
+            assert "INC-VERIFY-001" in slack_message
+            assert '"status": "success"' in slack_message
+
+    @pytest.mark.asyncio
+    async def test_suggestions_only_skips_verification(self):
+        import os
+
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-dummy-key-for-testing"
+
+        with (
+            patch("anthropic.Anthropic") as mock_anthropic,
+            patch(
+                "tools.fix_verifier.FixVerifier.verify_fix",
+                new=AsyncMock(),
+            ) as mock_verify,
+        ):
+            mock_client = MagicMock()
+            mock_anthropic.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                self._tool_response(
+                    "get_k8s_context", "tool_1", {"namespace": "production"}
+                ),
+                self._tool_response(
+                    "suggest_fix",
+                    "tool_2",
+                    {
+                        "title": "Increase memory limits",
+                        "description": "Evidence: OOMKilled on api-pod",
+                        "commands": [
+                            "kubectl set resources deployment/api -n production "
+                            "--limits=memory=512Mi"
+                        ],
+                        "verification_steps": ["kubectl get pods -n production"],
+                    },
+                ),
+                self._end_response(
+                    "Evidence: get_k8s_context showed OOMKilled on api-pod.\n"
+                    "OOM detected. Suggested memory increase to 512Mi via suggest_fix."
+                ),
+            ]
+            agent, storage = self._k8s_agent()
+
+            result = await agent.run(
+                {
+                    "type": "k8s",
+                    "namespace": "production",
+                    "pod": "api-pod",
+                    "org_id": "test-org",
+                },
+                incident_id="INC-VERIFY-002",
+                resume=False,
+            )
+
+            assert result["suggestions_only"] is True
+            assert result.get("fix_applied") is False
+            mock_verify.assert_not_called()
+            assert result.get("verification") is None
+            assert [
+                key
+                for key in storage.list_keys("test-org/logs")
+                if key.endswith("verification.json")
+            ] == []
+            agent.notifier.send_message.assert_not_called()
