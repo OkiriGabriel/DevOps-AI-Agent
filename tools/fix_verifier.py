@@ -132,7 +132,9 @@ class FixVerifier:
         }
         
         start_time = time.time()
-        check_interval = min(30, duration // 10)  # Check at least 10 times
+        # Check at least 10 times, but never faster than once per second so a
+        # short monitoring window cannot busy-spin.
+        check_interval = max(1, min(30, duration // 10))
         
         while time.time() - start_time < duration:
             monitoring_result["checks_performed"] += 1
