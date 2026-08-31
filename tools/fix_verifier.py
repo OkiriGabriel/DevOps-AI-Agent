@@ -125,12 +125,16 @@ class FixVerifier:
         monitoring_result = {
             "check_type": "stability_monitoring",
             "duration": duration,
-            "stable": True,
+            "stable": False,
             "checks_performed": 0,
             "failures": 0,
             "timestamps": []
         }
-        
+
+        if duration <= 0:
+            monitoring_result["reason"] = "Monitoring duration must be positive to verify stability"
+            return monitoring_result
+
         start_time = time.time()
         # Check at least 10 times, but never faster than once per second so a
         # short monitoring window cannot busy-spin.
@@ -160,16 +164,22 @@ class FixVerifier:
             
             await asyncio.sleep(check_interval)
         
-        # Calculate success rate
-        if monitoring_result["checks_performed"] > 0:
-            success_rate = (monitoring_result["checks_performed"] - monitoring_result["failures"]) / monitoring_result["checks_performed"]
-            monitoring_result["success_rate"] = f"{success_rate * 100:.1f}%"
-            
-            # Consider stable if success rate > 90%
-            if success_rate < 0.9:
-                monitoring_result["stable"] = False
-                monitoring_result["reason"] = f"Low success rate: {monitoring_result['success_rate']}"
-        
+        if monitoring_result["checks_performed"] == 0:
+            monitoring_result["stable"] = False
+            monitoring_result["reason"] = "No stability observations were performed"
+            return monitoring_result
+
+        success_rate = (
+            monitoring_result["checks_performed"] - monitoring_result["failures"]
+        ) / monitoring_result["checks_performed"]
+        monitoring_result["success_rate"] = f"{success_rate * 100:.1f}%"
+
+        if success_rate >= 0.9:
+            monitoring_result["stable"] = True
+        else:
+            monitoring_result["stable"] = False
+            monitoring_result["reason"] = f"Low success rate: {monitoring_result['success_rate']}"
+
         return monitoring_result
     
     async def _verify_k8s_fix(self, expected_state: Dict) -> Dict:

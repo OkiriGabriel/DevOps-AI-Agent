@@ -111,9 +111,9 @@ def has_successful_remediation(actions_taken: List[dict]) -> bool:
         result = action.get("result", {})
         if tool in REMEDIATION_TOOLS:
             if result.get("error") or result.get("blocked"):
-                return False
+                continue
             if result.get("success") is False:
-                return False
+                continue
             return True
     return False
 
