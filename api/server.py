@@ -98,6 +98,7 @@ async def _process_incident_with_org_creds(
             "fix_applied": result.get("fix_applied", False),
             "suggestions_only": result.get("suggestions_only", False),
             "suggested_fixes": result.get("suggested_fixes", []),
+            "verification": result.get("verification"),
             "ai_reasoning": result.get("reasoning"),
             "grounding": result.get("grounding"),
             "steps": result.get("steps"),

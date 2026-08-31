@@ -166,3 +166,190 @@ class TestAgentLoop:
             assert result["grounding"]["grounded"] is True
             assert len(result["suggested_fixes"]) == 1
             assert result["suggestions_only"] is True
+
+
+# ─── Issue #7: post-remediation FixVerifier integration ───────────────────────
+
+class TestFixVerification:
+    """verify_fix runs exactly once after successful remediation (never on a
+    suggestions-only run), and its structured result reaches the completed
+    result, the incident audit trail, and the Slack completion payload."""
+
+    @staticmethod
+    def _script(final_text, *tool_calls):
+        """Scripted Claude responses: tool_use rounds, then an end_turn text."""
+        script = []
+        for i, (name, inputs) in enumerate(tool_calls):
+            block = MagicMock()
+            block.type, block.name, block.id, block.input = "tool_use", name, f"t{i}", inputs
+            script.append(MagicMock(stop_reason="tool_use", content=[block]))
+        end = MagicMock(stop_reason="end_turn")
+        end.content = [MagicMock(type="text", text=final_text)]
+        return script + [end]
+
+    @staticmethod
+    def _agent():
+        """Agent with in-memory stores and mocked k8s/notification surfaces."""
+        import os
+        from agent.core import DevOpsAgent
+        from services.incident_store import IncidentStore
+        from services.org_docs import OrgDocs
+        from storage.memory_storage import MemoryStorage
+
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-dummy-key-for-testing"
+        agent = DevOpsAgent()
+        agent.k8s_collector.collect = AsyncMock(return_value={"pods": []})
+        agent.k8s_tools.run_kubectl = AsyncMock(return_value={"success": True})
+        agent.notifier.send_message = AsyncMock()
+        agent.notifier.send_fix_suggestion = AsyncMock()
+        storage = MemoryStorage()
+        agent.incident_store = IncidentStore(storage)
+        agent.org_docs = OrgDocs(MemoryStorage())
+        return agent, storage
+
+    @pytest.mark.asyncio
+    async def test_successful_remediation_triggers_verification(self):
+        verification_result = {
+            "verified": True, "status": "success", "incident_type": "k8s",
+            "fix_applied": "run_kubectl", "monitoring_period": 300,
+            "timestamp": "2026-08-19T00:00:00", "checks_performed": [],
+        }
+        with (
+            patch("anthropic.Anthropic") as mock_anthropic,
+            patch("tools.fix_verifier.FixVerifier.verify_fix",
+                  new=AsyncMock(return_value=verification_result)) as mock_verify,
+        ):
+            mock_anthropic.return_value.messages.create.side_effect = self._script(
+                "Evidence: get_k8s_context showed OOMKilled on api-pod.\n"
+                "Restarted the deployment via run_kubectl; rollout complete.",
+                ("get_k8s_context", {"namespace": "production"}),
+                ("run_kubectl", {"command": "rollout restart deployment/api -n production"}),
+            )
+            agent, storage = self._agent()
+            result = await agent.run(
+                {"type": "k8s", "namespace": "production", "pod": "api-pod", "org_id": "test-org"},
+                incident_id="INC-VERIFY-001", resume=False,
+            )
+
+            # Exactly one verifier call, incident-derived expected state, and the
+            # documented 300-second (5-minute) stability window.
+            mock_verify.assert_awaited_once()
+            assert mock_verify.await_args.kwargs == {
+                "incident_type": "k8s",
+                "fix_applied": "run_kubectl",
+                "expected_state": {"pod_name": "api-pod", "namespace": "production", "pod_status": "Running"},
+                "monitoring_duration": 300,
+            }
+            # The same structured value reaches the completed result, the
+            # incident audit trail, and the Slack completion payload.
+            assert result["fix_applied"] is True
+            assert result["verification"] == verification_result
+            keys = [k for k in storage.list_keys("test-org/logs") if k.endswith("verification.json")]
+            assert len(keys) == 1
+            assert storage.get_json(keys[0]) == verification_result
+            agent.notifier.send_message.assert_awaited_once()
+            slack_message = agent.notifier.send_message.await_args.args[0]
+            assert "INC-VERIFY-001" in slack_message
+            assert '"status": "success"' in slack_message
+
+    @pytest.mark.asyncio
+    async def test_suggestions_only_skips_verification(self):
+        with (
+            patch("anthropic.Anthropic") as mock_anthropic,
+            patch("tools.fix_verifier.FixVerifier.verify_fix", new=AsyncMock()) as mock_verify,
+        ):
+            mock_anthropic.return_value.messages.create.side_effect = self._script(
+                "Evidence: get_k8s_context showed OOMKilled on api-pod.\n"
+                "OOM detected. Suggested memory increase to 512Mi via suggest_fix.",
+                ("get_k8s_context", {"namespace": "production"}),
+                ("suggest_fix", {
+                    "title": "Increase memory limits",
+                    "description": "Evidence: OOMKilled on api-pod",
+                    "commands": ["kubectl set resources deployment/api -n production --limits=memory=512Mi"],
+                }),
+            )
+            agent, storage = self._agent()
+            result = await agent.run(
+                {"type": "k8s", "namespace": "production", "pod": "api-pod", "org_id": "test-org"},
+                incident_id="INC-VERIFY-002", resume=False,
+            )
+
+            assert result["suggestions_only"] is True
+            assert result.get("fix_applied") is False
+            mock_verify.assert_not_called()
+            assert result.get("verification") is None
+            assert [k for k in storage.list_keys("test-org/logs") if k.endswith("verification.json")] == []
+            agent.notifier.send_message.assert_not_called()
+
+
+# ─── Issue #7 regressions: canonical audit surface and stability stage ────────
+
+class TestVerificationAuditAndStability:
+    """The queue completion mapper must place the structured verification result
+    into the canonical org-scoped audit entry (the surface returned by GET /audit),
+    and the agent's configured stability window must make at least one
+    post-immediate observation before reporting stability."""
+
+    @pytest.mark.asyncio
+    async def test_canonical_audit_entry_contains_verification(self):
+        import api.server as server
+        from services.incident_store import IncidentStore
+        from storage.memory_storage import MemoryStorage
+
+        verification = {
+            "verified": True,
+            "status": "success",
+            "checks_performed": [{"check_type": "immediate", "passed": True}],
+        }
+        result = {
+            "diagnosis": "OOM remediated", "actions": [], "resolved": True,
+            "fix_applied": True, "verification": verification,
+        }
+        store = IncidentStore(MemoryStorage())
+        decision = MagicMock(should_escalate=False, duration_minutes=1.0, reasons=[])
+        with (
+            patch.object(server, "agent") as mock_agent,
+            patch.object(server, "escalation_service") as mock_escalation,
+            patch.object(server, "incident_queue") as mock_queue,
+            patch.object(server, "notifier") as mock_notifier,
+            patch.object(server, "incident_store", store),
+        ):
+            mock_agent.run = AsyncMock(return_value=result)
+            mock_escalation.evaluate.return_value = decision
+            mock_queue.mark_completed = MagicMock()
+            mock_notifier.send_resolution = AsyncMock()
+            await server._process_incident_with_org_creds(
+                {"incident_id": "INC-AUDIT-1", "org_id": "test-org"},
+                "INC-AUDIT-1", "test-org", {"type": "k8s", "org_id": "test-org"}, None,
+            )
+            response = await server.get_audit(org_id="test-org")
+
+        assert response["total"] == 1
+        assert response["events"][0].get("verification") == verification
+
+    @pytest.mark.asyncio
+    async def test_stability_stage_observes_with_agent_configured_duration(self):
+        from agent.core import FIX_VERIFICATION_MONITORING_SECONDS
+        from tools.fix_verifier import FixVerifier
+
+        fake_clock = MagicMock()
+        fake_clock.time.side_effect = (tick * 31.0 for tick in range(64))
+        fake_asyncio = MagicMock()
+        fake_asyncio.sleep = AsyncMock()
+        with (
+            patch("tools.fix_verifier.time", fake_clock),
+            patch("tools.fix_verifier.asyncio", fake_asyncio),
+        ):
+            result = await FixVerifier().verify_fix(
+                incident_type="cicd",
+                fix_applied="rerun_pipeline",
+                expected_state={},
+                monitoring_duration=FIX_VERIFICATION_MONITORING_SECONDS,
+            )
+
+        assert result["status"] == "success"
+        stability = result["checks_performed"][1]
+        assert stability["stable"] is True
+        assert stability["checks_performed"] >= 1, (
+            "stability was reported without observing the remediated state even once"
+        )

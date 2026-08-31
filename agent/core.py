@@ -13,6 +13,7 @@ import structlog
 
 from agent.classifier import classify_issue, get_cicd_platform
 from agent.grounding import (
+    REMEDIATION_TOOLS,
     build_evidence_reminder,
     extract_suggested_fixes,
     has_successful_remediation,
@@ -43,6 +44,7 @@ from tools.iac_tools import IaCTools
 from tools.cloud_tools import CloudTools
 from tools.notify import SlackNotifier
 from tools.fix_suggestions import validate_suggestion
+from tools.fix_verifier import FixVerifier
 from collectors.database_policy import check_database_access
 from services.incident_store import IncidentStore
 from services.org_docs import OrgDocs
@@ -398,6 +400,32 @@ AGENT_TOOLS = [
 ]
 
 
+# Stability-monitoring window for post-remediation verification: the documented
+# 300-second (5-minute) window advertised in README and SECURITY_GUARANTEES.
+FIX_VERIFICATION_MONITORING_SECONDS = 300
+
+
+def _verification_expected_state(issue_type: str, context: dict) -> dict:
+    """Map the incident type to the expected state that FixVerifier checks."""
+    if issue_type == "k8s":
+        expected_state = {"pod_status": "Running"}
+        if context.get("pod"):
+            expected_state["pod_name"] = context["pod"]
+        if context.get("namespace"):
+            expected_state["namespace"] = context["namespace"]
+        return expected_state
+    if issue_type in ("server", "linux", "windows", "rhel") and context.get("service"):
+        return {"service_name": context["service"]}
+    return {}
+
+
+def _remediation_summary(actions_taken: list) -> str:
+    """Names of the remediation tools applied during the run."""
+    return ", ".join(
+        a.get("tool", "") for a in actions_taken if a.get("tool") in REMEDIATION_TOOLS
+    )
+
+
 class DevOpsAgent:
     def __init__(self):
         self.client = None
@@ -415,6 +443,7 @@ class DevOpsAgent:
         self.cloud_tools = CloudTools()
         
         self.notifier = SlackNotifier()
+        self.fix_verifier = FixVerifier()
         
         # Existing collectors
         self.k8s_collector = K8sCollector()
@@ -565,11 +594,29 @@ class DevOpsAgent:
                     self._save_checkpoint(org_id, incident_id, messages, actions_taken, steps, full_context, issue_type)
                     continue
 
+                fix_applied = has_successful_remediation(actions_taken)
                 resolved = validation["grounded"] and (
-                    has_successful_remediation(actions_taken)
+                    fix_applied
                     or validation.get("has_suggestions")
                 )
                 suggested_fixes = extract_suggested_fixes(actions_taken)
+                verification = None
+                if fix_applied:
+                    verification = await self.fix_verifier.verify_fix(
+                        incident_type=issue_type,
+                        fix_applied=_remediation_summary(actions_taken),
+                        expected_state=_verification_expected_state(issue_type, context),
+                        monitoring_duration=FIX_VERIFICATION_MONITORING_SECONDS,
+                    )
+                    self.incident_store.save_log(
+                        org_id, incident_id, "verification.json", verification
+                    )
+                    await self.notifier.send_message(
+                        f"*Fix verification — incident `{incident_id}`:* "
+                        f"`{verification.get('status', 'unknown')}`\n"
+                        f"```json\n{json.dumps(verification, indent=2)}\n```",
+                        severity="info" if verification.get("verified") else "warning",
+                    )
                 result = {
                     "resolved": resolved,
                     "diagnosis": final_text,
@@ -578,8 +625,9 @@ class DevOpsAgent:
                     "reasoning": final_text,
                     "grounding": validation,
                     "suggested_fixes": suggested_fixes,
-                    "fix_applied": has_successful_remediation(actions_taken),
-                    "suggestions_only": bool(suggested_fixes) and not has_successful_remediation(actions_taken),
+                    "fix_applied": fix_applied,
+                    "suggestions_only": bool(suggested_fixes) and not fix_applied,
+                    "verification": verification,
                     "incident_id": incident_id,
                     "org_id": org_id,
                 }
