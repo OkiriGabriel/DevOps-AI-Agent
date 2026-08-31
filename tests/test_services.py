@@ -1,5 +1,10 @@
 """Tests for PII scrubber, storage, grounding, and incident queue."""
+import asyncio
+import importlib
 import os
+from datetime import datetime, timezone
+from unittest.mock import patch
+
 import pytest
 
 from services.pii_scrubber import scrub_text, scrub_dict
@@ -85,6 +90,71 @@ class TestIncidentStore:
         assert cp["steps"] == 1
         store.delete_checkpoint("org1", "INC-1")
         assert store.load_checkpoint("org1", "INC-1") is None
+
+    def test_apply_retention_deletes_aged_keys(self, monkeypatch):
+        """Characterization: aged audit/log/checkpoint/queue keys are deleted, fresh kept."""
+        monkeypatch.setenv("AUDIT_RETENTION_DAYS", "90")
+        storage = MemoryStorage()
+        store = IncidentStore(storage)
+        org = "org1"
+        now = datetime.now(timezone.utc)
+        fresh_ym = f"{now.year}/{now.month:02d}"
+        aged_keys = [
+            f"{org}/audit/2020/01/INC-old.json",
+            f"{org}/logs/2020/01/INC-old/conversation.json",
+            f"{org}/checkpoints/2020/01/INC-old.json",
+            f"{org}/queue/2020/01/INC-old.json",
+        ]
+        fresh_keys = [
+            f"{org}/audit/{fresh_ym}/INC-new.json",
+            f"{org}/logs/{fresh_ym}/INC-new/conversation.json",
+            storage.checkpoint_key(org, "INC-new"),
+            storage.queue_key(org, "pending", "INC-new"),
+        ]
+        for key in aged_keys + fresh_keys:
+            storage.put_json(key, {"id": "x"})
+
+        deleted = store.apply_retention(org)
+
+        assert deleted == len(aged_keys)
+        for key in aged_keys:
+            assert not storage.exists(key)
+        for key in fresh_keys:
+            assert storage.exists(key)
+
+
+class TestRetentionScheduler:
+    @pytest.mark.asyncio
+    async def test_startup_retention_pass_covers_configured_orgs(self, monkeypatch):
+        """Entering the API lifespan must schedule one immediate retention pass
+        covering the de-duplicated union of ORG_ID and comma-separated ORG_IDS."""
+        monkeypatch.setenv("ORG_ID", "default")
+        monkeypatch.setenv("ORG_IDS", "a, b,a,,")
+        calls = []
+
+        async def spy_apply_retention(self, org_id):
+            calls.append(org_id)
+            return 0
+
+        monkeypatch.setattr(IncidentStore, "apply_retention", spy_apply_retention)
+        # Neutralize the queue worker loop: no orgs to poll, so it just idles.
+        monkeypatch.setattr(IncidentQueue, "list_pending_org_ids", lambda self: [])
+
+        with (
+            patch("agent.core.DevOpsAgent"),
+            patch("tools.notify.SlackNotifier"),
+            patch("services.org_docs.OrgDocs"),
+            patch("services.escalation.EscalationService"),
+        ):
+            import api.server as server
+
+            importlib.reload(server)
+            async with server.lifespan(server.app):
+                # Give scheduled startup work a deterministic event-loop turn.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+
+        assert calls == ["default", "a", "b"]
 
 
 class TestOrgDocs:
