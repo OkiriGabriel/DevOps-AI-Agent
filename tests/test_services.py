@@ -9,7 +9,7 @@ from services.incident_store import IncidentStore
 from services.org_docs import OrgDocs
 from services.org_config import OrgConfig
 from services.org_context import org_credentials
-from agent.grounding import validate_resolution, has_tool_evidence, append_grounding_rules
+from agent.grounding import validate_resolution, has_tool_evidence, append_grounding_rules, has_successful_remediation
 
 
 class TestPIIScrubber:
@@ -143,6 +143,21 @@ class TestGrounding:
         prompt = append_grounding_rules("You are a DevOps agent.")
         assert "GROUNDING RULES" in prompt
         assert "hallucination" in prompt.lower() or "NEVER" in prompt
+
+    def test_successful_remediation_after_failed_attempt(self):
+        """Issue #54: later successful remediation counts even if an earlier attempt failed."""
+        actions = [
+            {"tool": "apply_k8s_manifest", "result": {"success": False, "error": "conflict"}},
+            {"tool": "run_kubectl", "result": {"success": True}},
+        ]
+        assert has_successful_remediation(actions) is True
+
+    def test_no_successful_remediation_when_all_fail(self):
+        actions = [
+            {"tool": "apply_k8s_manifest", "result": {"success": False, "error": "conflict"}},
+            {"tool": "run_kubectl", "result": {"success": False, "error": "timeout"}},
+        ]
+        assert has_successful_remediation(actions) is False
 
 
 class TestOrgConfig:
